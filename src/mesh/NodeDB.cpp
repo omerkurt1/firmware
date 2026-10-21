@@ -808,7 +808,7 @@ template <typename Map> std::vector<NodeNum> snapshotSatelliteNodeNums(const Map
 // last_heard; 0 = owner evicted, i.e. an orphan - first out). Never evicts our
 // own node's entry. Caller holds satelliteMutex. Returns false if nothing
 // could be evicted.
-template <typename Map> bool evictStalestSatellite(NodeDB &db, Map &map)
+template <typename Map> bool evictStalestSatellite(NodeDB &db, Map &map, NodeNum *evictedNode = nullptr)
 {
     auto victim = map.end();
     uint32_t victimTs = UINT32_MAX;
@@ -823,6 +823,8 @@ template <typename Map> bool evictStalestSatellite(NodeDB &db, Map &map)
     }
     if (victim == map.end())
         return false;
+    if (evictedNode)
+        *evictedNode = victim->first;
     map.erase(victim);
     return true;
 }
@@ -830,11 +832,11 @@ template <typename Map> bool evictStalestSatellite(NodeDB &db, Map &map)
 // Keep `map` within MAX_SATELLITE_NODES ahead of inserting `incoming` (the
 // tier-1/tier-2 split: only the freshest MAX_SATELLITE_NODES nodes carry
 // satellite payloads). Caller holds satelliteMutex.
-template <typename Map> void evictSatelliteOverCap(NodeDB &db, Map &map, NodeNum incoming)
+template <typename Map> bool evictSatelliteOverCap(NodeDB &db, Map &map, NodeNum incoming, NodeNum *evictedNode = nullptr)
 {
     if (map.size() < MAX_SATELLITE_NODES || map.count(incoming))
-        return;
-    evictStalestSatellite(db, map);
+        return false;
+    return evictStalestSatellite(db, map, evictedNode);
 }
 } // namespace
 
@@ -1002,22 +1004,26 @@ void NodeDB::installDefaultNodeDatabase()
     nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
-    concurrency::LockGuard satelliteGuard(&satelliteMutex);
+    {
+        concurrency::LockGuard satelliteGuard(&satelliteMutex);
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    nodePositions.clear();
+        nodePositions.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
-    nodeTelemetry.clear();
+        nodeTelemetry.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
-    nodeEnvironment.clear();
+        nodeEnvironment.clear();
 #endif
 
 #if !MESHTASTIC_EXCLUDE_STATUSDB
-    nodeStatus.clear();
+        nodeStatus.clear();
 #endif
+    }
+    const PositionUpdateEvent event{.kind = PositionUpdateKind::RESET};
+    positionUpdated.notifyObservers(&event);
 }
 
 void NodeDB::installDefaultConfig(bool preserveKey = false)
@@ -1908,11 +1914,18 @@ void NodeDB::removeNodeByNum(NodeNum nodeNum)
 void NodeDB::clearLocalPosition()
 {
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    concurrency::LockGuard guard(&satelliteMutex);
-    nodePositions.erase(getNodeNum());
+    {
+        concurrency::LockGuard guard(&satelliteMutex);
+        nodePositions.erase(getNodeNum());
+    }
 #endif
     setLocalPosition(meshtastic_Position_init_default);
     localPositionUpdatedSinceBoot = false;
+    const PositionUpdateEvent event{.nodeNum = getNodeNum(),
+                                    .receivedAtUptimeSeconds = Time::getUptimeSecs(),
+                                    .kind = PositionUpdateKind::REMOVED,
+                                    .source = PositionUpdateSource::LOCAL};
+    positionUpdated.notifyObservers(&event);
 }
 
 bool NodeDB::copyNodePosition(NodeNum n, meshtastic_PositionLite &out) const
@@ -2025,30 +2038,51 @@ void NodeDB::touchNodePositionTime(NodeNum n, uint32_t time)
     (void)n;
     (void)time;
 #else
-    concurrency::LockGuard guard(&satelliteMutex);
-    evictSatelliteOverCap(*this, nodePositions, n);
-    nodePositions[n].time = time;
+    NodeNum evictedNode = 0;
+    bool evictedPosition = false;
+    {
+        concurrency::LockGuard guard(&satelliteMutex);
+        evictedPosition = evictSatelliteOverCap(*this, nodePositions, n, &evictedNode);
+        nodePositions[n].time = time;
+    }
+    if (evictedPosition) {
+        const PositionUpdateEvent event{.nodeNum = evictedNode,
+                                        .receivedAtUptimeSeconds = Time::getUptimeSecs(),
+                                        .kind = PositionUpdateKind::REMOVED,
+                                        .source = PositionUpdateSource::INTERNAL};
+        positionUpdated.notifyObservers(&event);
+    }
 #endif
 }
 
 void NodeDB::eraseNodeSatellites(NodeNum n)
 {
-    concurrency::LockGuard guard(&satelliteMutex);
+    bool removedPosition = false;
+    {
+        concurrency::LockGuard guard(&satelliteMutex);
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    nodePositions.erase(n);
+        removedPosition = nodePositions.erase(n) > 0;
 #endif
 
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
-    nodeTelemetry.erase(n);
+        nodeTelemetry.erase(n);
 #endif
 
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
-    nodeEnvironment.erase(n);
+        nodeEnvironment.erase(n);
 #endif
 
 #if !MESHTASTIC_EXCLUDE_STATUSDB
-    nodeStatus.erase(n);
+        nodeStatus.erase(n);
 #endif
+    }
+    if (removedPosition) {
+        const PositionUpdateEvent event{.nodeNum = n,
+                                        .receivedAtUptimeSeconds = Time::getUptimeSecs(),
+                                        .kind = PositionUpdateKind::REMOVED,
+                                        .source = PositionUpdateSource::INTERNAL};
+        positionUpdated.notifyObservers(&event);
+    }
 }
 
 bool NodeDB::enforceSatelliteCaps()
@@ -2451,6 +2485,9 @@ void NodeDB::nodeDBSelfCare()
 
 void NodeDB::loadFromDisk()
 {
+    const PositionUpdateEvent positionReset{.kind = PositionUpdateKind::RESET};
+    positionUpdated.notifyObservers(&positionReset);
+
     // Mark the current device state as completely unusable, so that if we fail reading the entire file from
     // disk we will still factoryReset to restore things.
     devicestate.version = 0;
@@ -3662,6 +3699,19 @@ void logHopStartDrop(const meshtastic_MeshPacket &p, const char *context)
 
 /** Update position info for this node based on received position data
  */
+static PositionUpdateSource toPositionUpdateSource(RxSource source)
+{
+    switch (source) {
+    case RX_SRC_LOCAL:
+        return PositionUpdateSource::LOCAL;
+    case RX_SRC_USER:
+        return PositionUpdateSource::USER;
+    case RX_SRC_RADIO:
+    default:
+        return PositionUpdateSource::RADIO;
+    }
+}
+
 void NodeDB::updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSource src)
 {
     meshtastic_NodeInfoLite *info = getOrCreateMeshNode(nodeId);
@@ -3681,9 +3731,12 @@ void NodeDB::updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSou
     updateGUIforNode = info;
     notifyObservers(true);
 #else
+    bool hasCoordinateUpdate = false;
+    NodeNum evictedNode = 0;
+    bool evictedPosition = false;
     {
         concurrency::LockGuard guard(&satelliteMutex);
-        evictSatelliteOverCap(*this, nodePositions, nodeId);
+        evictedPosition = evictSatelliteOverCap(*this, nodePositions, nodeId, &evictedNode);
         meshtastic_PositionLite &slot = nodePositions[nodeId]; // creates default-zero entry if missing
 
         if (src == RX_SRC_LOCAL) {
@@ -3693,6 +3746,7 @@ void NodeDB::updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSou
 
             setLocalPosition(p);
             slot = TypeConversions::ConvertToPositionLite(p);
+            hasCoordinateUpdate = p.latitude_i != 0 || p.longitude_i != 0;
         } else if ((p.time > 0) && !p.latitude_i && !p.longitude_i && !p.timestamp && !p.location_source) {
             // FIXME SPECIAL TIME SETTING PACKET FROM EUD TO RADIO
             // (stop-gap fix for issue #900)
@@ -3711,11 +3765,30 @@ void NodeDB::updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSou
 
             // Next, update atomically
             slot = TypeConversions::ConvertToPositionLite(p);
+            hasCoordinateUpdate = p.latitude_i != 0 || p.longitude_i != 0;
 
             // Last, restore any fields that may have been overwritten
             if (!slot.time)
                 slot.time = tmp_time;
         }
+    }
+    if (evictedPosition) {
+        const PositionUpdateEvent event{.nodeNum = evictedNode,
+                                        .receivedAtUptimeSeconds = Time::getUptimeSecs(),
+                                        .kind = PositionUpdateKind::REMOVED,
+                                        .source = PositionUpdateSource::INTERNAL};
+        positionUpdated.notifyObservers(&event);
+    }
+    if (hasCoordinateUpdate) {
+        const PositionUpdateEvent event{
+            .nodeNum = nodeId,
+            .receivedAtUptimeSeconds = Time::getUptimeSecs(),
+            .reportedTime = p.timestamp > 0 ? p.timestamp : p.time,
+            .precisionBits = static_cast<uint8_t>(std::min(p.precision_bits, static_cast<uint32_t>(UINT8_MAX))),
+            .kind = PositionUpdateKind::UPDATED,
+            .source = toPositionUpdateSource(src),
+        };
+        positionUpdated.notifyObservers(&event);
     }
     updateGUIforNode = info;
     notifyObservers(true); // Force an update whether or not our node counts have changed

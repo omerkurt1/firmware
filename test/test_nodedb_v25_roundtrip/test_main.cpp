@@ -12,6 +12,7 @@
 #endif
 
 #include "FSCommon.h"
+#include "UptimeClock.h"
 
 // This is a disk round-trip suite; without a filesystem there is nothing to pin.
 #if defined(FSCom)
@@ -34,6 +35,26 @@ namespace
 {
 
 NodeDBTestShim *db = nullptr;
+
+class PositionUpdateCapture
+{
+  public:
+    explicit PositionUpdateCapture(NodeDB &source) : observer(this, &PositionUpdateCapture::handleUpdate)
+    {
+        observer.observe(&source.positionUpdated);
+    }
+
+    std::vector<PositionUpdateEvent> events;
+
+  private:
+    int handleUpdate(const PositionUpdateEvent *event)
+    {
+        events.push_back(*event);
+        return 0;
+    }
+
+    CallbackObserver<PositionUpdateCapture, const PositionUpdateEvent *> observer;
+};
 
 /// Simulate a process restart. A real cold boot starts with a zeroed nodeDatabase
 /// global; in-process the decode callback would append on top of the previous
@@ -185,7 +206,11 @@ void clearAllSatellites()
 } // namespace
 
 void setUp(void) {}
-void tearDown(void) {}
+void tearDown(void)
+{
+    Time::useRealClock();
+    Time::resetMonotonicForTests();
+}
 
 // --- Environment preconditions ---
 
@@ -299,6 +324,51 @@ static void test_snrQuantization_roundTripsThroughDisk(void)
     TEST_ASSERT_TRUE(nodeInfoLiteHasSnr(n));
     TEST_ASSERT_EQUAL_FLOAT(8.0f, n->snr);
 }
+
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+static void test_positionUpdates_onlyCoordinateChangesRefreshAge(void)
+{
+    constexpr NodeNum POSITION_NODE = 0x53000001;
+    addUserNode(POSITION_NODE, 0x31);
+    PositionUpdateCapture capture(*nodeDB);
+
+    Time::resetMonotonicForTests();
+    Time::setTestMillis(42000);
+    meshtastic_Position position = meshtastic_Position_init_zero;
+    position.has_latitude_i = true;
+    position.latitude_i = 410082000;
+    position.has_longitude_i = true;
+    position.longitude_i = 289784000;
+    position.timestamp = 1700000100;
+    position.precision_bits = 24;
+    nodeDB->updatePosition(POSITION_NODE, position, RX_SRC_RADIO);
+
+    TEST_ASSERT_EQUAL_UINT(1, capture.events.size());
+    TEST_ASSERT_EQUAL_UINT32(POSITION_NODE, capture.events[0].nodeNum);
+    TEST_ASSERT_EQUAL_UINT32(42, capture.events[0].receivedAtUptimeSeconds);
+    TEST_ASSERT_EQUAL_UINT32(1700000100, capture.events[0].reportedTime);
+    TEST_ASSERT_EQUAL_UINT8(24, capture.events[0].precisionBits);
+    TEST_ASSERT_EQUAL(PositionUpdateKind::UPDATED, capture.events[0].kind);
+    TEST_ASSERT_EQUAL(PositionUpdateSource::RADIO, capture.events[0].source);
+
+    meshtastic_Telemetry telemetry = meshtastic_Telemetry_init_zero;
+    telemetry.which_variant = meshtastic_Telemetry_device_metrics_tag;
+    telemetry.variant.device_metrics.has_battery_level = true;
+    telemetry.variant.device_metrics.battery_level = 75;
+    Time::setTestMillis(90000);
+    nodeDB->updateTelemetry(POSITION_NODE, telemetry, RX_SRC_RADIO);
+
+    meshtastic_Position timeOnly = meshtastic_Position_init_zero;
+    timeOnly.time = 1700000200;
+    nodeDB->updatePosition(POSITION_NODE, timeOnly, RX_SRC_RADIO);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(1, capture.events.size(), "telemetry and time-only packets must not refresh position age");
+
+    nodeDB->eraseNodeSatellites(POSITION_NODE);
+    TEST_ASSERT_EQUAL_UINT(2, capture.events.size());
+    TEST_ASSERT_EQUAL(PositionUpdateKind::REMOVED, capture.events[1].kind);
+    TEST_ASSERT_EQUAL_UINT32(POSITION_NODE, capture.events[1].nodeNum);
+}
+#endif
 
 // --- Full header + satellite-map projection/rehydration cycle ---
 
@@ -726,6 +796,9 @@ NDBR_TEST_ENTRY void setup()
     RUN_TEST(test_snrQuantization_roundTripsThroughDisk);
 
     printf("\n=== Satellite projection/rehydration ===\n");
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    RUN_TEST(test_positionUpdates_onlyCoordinateChangesRefreshAge);
+#endif
     RUN_TEST(test_fullRoundTrip_headerAndSatelliteFidelity);
 
     printf("\n=== Keyless-save gate ===\n");

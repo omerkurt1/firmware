@@ -12,6 +12,7 @@
 
 #include "MeshTypes.h"
 #include "NodeStatus.h"
+#include "PositionUpdateEvent.h"
 #include "WarmNodeStore.h"
 #include "concurrency/Lock.h"
 #include "configuration.h"
@@ -311,6 +312,7 @@ class NodeDB
     bool updateGUI = false; // we think the gui should definitely be redrawn, screen will clear this once handled
     meshtastic_NodeInfoLite *updateGUIforNode = NULL; // if currently showing this node, we think you should update the GUI
     Observable<const meshtastic::NodeStatus *> newStatus;
+    Observable<const PositionUpdateEvent *> positionUpdated;
     pb_size_t numMeshNodes;
 
     // Satellite per-NodeNum maps. std::map avoids unordered_map's bucket-array
