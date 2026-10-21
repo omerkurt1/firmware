@@ -18,6 +18,7 @@
 #include "configuration.h"
 #include "mesh-pb-constants.h"
 #include "mesh/generated/meshtastic/mesh.pb.h" // For CriticalErrorCode
+#include "navigation/PositionFreshnessTracker.h"
 
 #if ARCH_PORTDUINO
 #include "PortduinoGlue.h"
@@ -551,6 +552,8 @@ class NodeDB
     // Thread-safe satellite-map accessors. Return false if absent or the
     // corresponding DB is compiled out.
     bool copyNodePosition(NodeNum n, meshtastic_PositionLite &out) const;
+    bool copyNavigationPosition(NodeNum n, meshtastic_PositionLite &out, PositionFreshness &freshness, uint32_t nowUptimeSeconds,
+                                const PositionFreshnessPolicy &policy = {}) const;
     bool copyNodeTelemetry(NodeNum n, meshtastic_DeviceMetrics &out) const;
     bool copyNodeEnvironment(NodeNum n, meshtastic_EnvironmentMetrics &out) const;
     bool copyNodeStatus(NodeNum n, meshtastic_StatusMessage &out) const;
@@ -699,6 +702,9 @@ class NodeDB
 
   private:
     mutable concurrency::Lock satelliteMutex;
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    PositionFreshnessTracker positionFreshness;
+#endif
     bool duplicateWarned = false;
     bool localPositionUpdatedSinceBoot = false;
     bool migrationSavePending = false;

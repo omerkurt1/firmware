@@ -390,6 +390,10 @@ static void test_fullRoundTrip_headerAndSatelliteFidelity(void)
     pos.location_source = meshtastic_Position_LocSource_LOC_INTERNAL;
     pos.precision_bits = 32;
     nodeDB->updatePosition(P, pos);
+    meshtastic_PositionLite navigationPosition;
+    PositionFreshness navigationFreshness;
+    TEST_ASSERT_TRUE(db->copyNavigationPosition(P, navigationPosition, navigationFreshness, Time::getUptimeSecs()));
+    TEST_ASSERT_TRUE(navigationFreshness.ageKnown);
 #endif
 
     addUserNode(T, 0x12);
@@ -475,6 +479,8 @@ static void test_fullRoundTrip_headerAndSatelliteFidelity(void)
     TEST_ASSERT_EQUAL_UINT32(1700000200, gotPos.time);
     TEST_ASSERT_EQUAL(meshtastic_Position_LocSource_LOC_INTERNAL, gotPos.location_source);
     TEST_ASSERT_EQUAL_UINT32(32, gotPos.precision_bits);
+    TEST_ASSERT_TRUE(db->copyNavigationPosition(P, navigationPosition, navigationFreshness, Time::getUptimeSecs()));
+    TEST_ASSERT_FALSE_MESSAGE(navigationFreshness.ageKnown, "disk-loaded coordinates must not become live navigation fixes");
     TEST_ASSERT_FALSE_MESSAGE(db->hasNodePosition(T), "no position was ever written for T");
 #endif
 

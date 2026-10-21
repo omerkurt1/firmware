@@ -9,6 +9,7 @@ enum class NavigationPositionState : uint8_t {
     LOCAL_POSITION_STALE,
     TARGET_POSITION_STALE,
     POSITION_AGE_UNKNOWN,
+    NO_TARGET_SELECTED,
 };
 
 enum class NavigationHeadingSource : uint8_t {
@@ -50,4 +51,8 @@ struct NavigationSnapshot {
     bool distanceValid = false;
     bool bearingValid = false;
     bool arrowValid = false;
+    bool localPositionAgeKnown = false;
+    bool targetPositionAgeKnown = false;
+    bool localPositionWarning = false;
+    bool targetPositionWarning = false;
 };
