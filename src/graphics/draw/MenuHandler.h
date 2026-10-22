@@ -66,6 +66,8 @@ class menuHandler
         ThemeMenu,
         HamModeConfirm,
         LicensedToNormalConfirm,
+        NavigationPickerMenu,
+        NavigationUnavailableMenu,
 #if HAS_LORA_FEM
         LoraFemLnaToggleMenu
 #endif
@@ -111,6 +113,8 @@ class menuHandler
     static void shutdownMenu();
     static void NodePicker();
     static void manageNodeMenu();
+    static void navigationMenu();
+    static void navigationPicker();
     static void addFavoriteMenu();
     static void removeFavoriteMenu();
     static void waypointBaseMenu();

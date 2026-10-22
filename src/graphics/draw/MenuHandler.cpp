@@ -19,6 +19,7 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/draw/MessageRenderer.h"
+#include "graphics/draw/NavigationRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
@@ -42,6 +43,7 @@
 #endif
 #include "modules/TraceRouteModule.h"
 #include "modules/WaypointModule.h"
+#include "navigation/NavigationService.h"
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
 #include "WaypointStore.h"
 #endif
@@ -1718,6 +1720,47 @@ void menuHandler::NodePicker()
     });
 }
 
+void menuHandler::navigationMenu()
+{
+    if (!navigationService)
+        return;
+    if (!navigationService->getTarget()) {
+        menuQueue = NavigationPickerMenu;
+        screen->runNow();
+        return;
+    }
+    static const char *options[] = {"Select target", "Clear target", "Back"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Find a device";
+    bannerOptions.optionsArrayPtr = options;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.bannerCallback = [](int selected) {
+        if (selected == 0)
+            menuQueue = NavigationPickerMenu;
+        else if (selected == 1 && navigationService)
+            navigationService->clearTarget();
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::navigationPicker()
+{
+    if (!navigationService)
+        return;
+    if (!nodeDB || nodeDB->getNumMeshNodes() <= 1) {
+        screen->showSimpleBanner("No other devices\nWait for node data");
+        return;
+    }
+    screen->showNodePicker("Select target", 30000, [](uint32_t nodeNum) {
+        if (NavigationRenderer::selectTarget(nodeNum))
+            screen->setFrames(Screen::FOCUS_NAVIGATION);
+        else
+            menuQueue = NavigationUnavailableMenu;
+        screen->runNow();
+    });
+}
+
 void menuHandler::manageNodeMenu()
 {
     // If we don't have a node selected yet, go fast exit
@@ -1725,10 +1768,16 @@ void menuHandler::manageNodeMenu()
     if (!node) {
         return;
     }
-    enum optionsNumbers { Back, Favorite, Mute, TraceRoute, KeyVerification, Ignore, enumEnd };
+    enum optionsNumbers { Back, Navigate, Favorite, Mute, TraceRoute, KeyVerification, Ignore, enumEnd };
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
     int options = 1;
+
+    if (navigationService && NavigationRenderer::supportsDisplay(screen->getDisplayDevice()) &&
+        node->num != nodeDB->getNodeNum() && !nodeInfoLiteIsIgnored(node)) {
+        optionsArray[options] = "Navigate";
+        optionsEnumArray[options++] = Navigate;
+    }
 
     if (nodeInfoLiteIsFavorite(node)) {
         optionsArray[options] = "Unfavorite";
@@ -1779,7 +1828,13 @@ void menuHandler::manageNodeMenu()
             return;
         }
 
-        if (selected == Favorite) {
+        if (selected == Navigate) {
+            if (NavigationRenderer::selectTarget(menuHandler::pickedNodeNum))
+                screen->setFrames(Screen::FOCUS_NAVIGATION);
+            else
+                menuQueue = NavigationUnavailableMenu;
+            screen->runNow();
+        } else if (selected == Favorite) {
             const auto *n = nodeDB->getMeshNode(menuHandler::pickedNodeNum);
             if (!n) {
                 return;
@@ -3305,6 +3360,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case NodePickerMenu:
         NodePicker();
+        break;
+    case NavigationPickerMenu:
+        navigationPicker();
+        break;
+    case NavigationUnavailableMenu:
+        screen->showSimpleBanner("Target unavailable\nSelect another device", 5000);
         break;
     case ManageNodeMenu:
         manageNodeMenu();

@@ -47,6 +47,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "draw/DebugRenderer.h"
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
+#include "draw/NavigationRenderer.h"
 #include "draw/NodeListRenderer.h"
 #include "draw/NotificationRenderer.h"
 #include "draw/UIRenderer.h"
@@ -86,6 +87,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "modules/games/GamesModule.h"
 #endif
 #include "modules/WaypointModule.h"
+#include "navigation/NavigationService.h"
 #include "sleep.h"
 #include "target_specific.h"
 extern MessageStore messageStore;
@@ -118,9 +120,9 @@ namespace graphics
 
 // DEBUG
 #if BASEUI_HAS_GAMES
-#define NUM_EXTRA_FRAMES 4 // text message, debug frame, and the always-present games frame
+#define NUM_EXTRA_FRAMES 5 // Includes the product navigation frame.
 #else
-#define NUM_EXTRA_FRAMES 3 // text message and debug frame
+#define NUM_EXTRA_FRAMES 4 // Includes the product navigation frame.
 #endif
 // if defined a pixel will blink to show redraws
 // #define SHOW_REDRAWS
@@ -1434,8 +1436,17 @@ void Screen::setFrames(FrameFocus focus)
         PUSH_FRAME_TITLE("Home");
     }
 
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    if (navigationService && NavigationRenderer::supportsDisplay(dispdev)) {
+        fsi.positions.navigation = numframes;
+        normalFrames[numframes++] = NavigationRenderer::drawFrame;
+        indicatorIcons.push_back(icon_compass);
+        PUSH_FRAME_TITLE("Find");
+    }
+#endif
+
 #if BASEUI_HAS_GAMES
-    // Games frame: always present (even with no game running), positioned directly after home.
+    // Games frame: always present (even with no game running).
     if (gamesModule) {
         fsi.positions.games = numframes;
         normalFrames[numframes++] = drawGamesFrame;
@@ -1637,6 +1648,10 @@ void Screen::setFrames(FrameFocus focus)
         break;
     case FOCUS_SYSTEM:
         ui->switchToFrame(fsi.positions.system);
+        break;
+    case FOCUS_NAVIGATION:
+        if (fsi.positions.navigation != 255)
+            ui->switchToFrame(fsi.positions.navigation);
         break;
 
     case FOCUS_PRESERVE:
@@ -2353,6 +2368,9 @@ int Screen::handleInputEvent(const InputEvent *event)
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
+                } else if (framesetInfo.positions.navigation != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.navigation) {
+                    menuHandler::navigationMenu();
 #if BASEUI_HAS_GAMES
                 } else if (gamesModule && framesetInfo.positions.games != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.games) {

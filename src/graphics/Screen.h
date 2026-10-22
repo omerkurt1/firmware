@@ -65,6 +65,7 @@ class Screen
         FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise no info about which module to focus
         FOCUS_CLOCK,
         FOCUS_SYSTEM,
+        FOCUS_NAVIGATION,
     };
 
     explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);
@@ -253,6 +254,7 @@ class Screen : public concurrency::OSThread
         FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise no info about which module to focus
         FOCUS_CLOCK,
         FOCUS_SYSTEM,
+        FOCUS_NAVIGATION,
     };
 
     // Regenerate the normal set of frames, focusing a specific frame if requested
@@ -774,6 +776,7 @@ class Screen : public concurrency::OSThread
             uint8_t deviceFocused = 255;
             uint8_t system = 255;
             uint8_t gps = 255;
+            uint8_t navigation = 255;
             uint8_t home = 255;
             uint8_t games = 255;
             uint8_t textMessage = 255;
