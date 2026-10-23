@@ -39,10 +39,23 @@ bool NavigationService::setFreshnessPolicies(const PositionFreshnessPolicy &loca
     return true;
 }
 
-NavigationSnapshot NavigationService::getSnapshot(const NavigationHeading &heading) const
+bool NavigationService::setHeadingPolicy(const NavigationHeadingPolicy &policy)
+{
+    if (!NavigationHeadingValidator::isPolicyValid(policy))
+        return false;
+    concurrency::LockGuard guard(&mutex);
+    headingPolicy = policy;
+    return true;
+}
+
+NavigationSnapshot NavigationService::getSnapshot(const NavigationHeadingSample &heading) const
 {
     concurrency::LockGuard guard(&mutex);
     NavigationSnapshot snapshot;
+    const auto evaluatedHeading = NavigationHeadingValidator::evaluate(heading, Time::getMillisMonotonic(), headingPolicy);
+    snapshot.headingState = evaluatedHeading.state;
+    snapshot.headingAgeKnown = evaluatedHeading.ageKnown;
+    snapshot.headingAgeMillis = evaluatedHeading.ageMillis;
     snapshot.targetNode = targetNode;
     if (!targetNode) {
         snapshot.positionState = NavigationPositionState::NO_TARGET_SELECTED;
@@ -81,7 +94,7 @@ NavigationSnapshot NavigationService::getSnapshot(const NavigationHeading &headi
     if (snapshot.positionState != NavigationPositionState::READY)
         return snapshot;
 
-    const auto geometry = NavigationCalculator::calculate(local, target, heading);
+    const auto geometry = NavigationCalculator::calculate(local, target, evaluatedHeading.heading);
     snapshot.distanceMeters = geometry.distanceMeters;
     snapshot.absoluteBearingDegrees = geometry.absoluteBearingDegrees;
     snapshot.relativeBearingDegrees = geometry.relativeBearingDegrees;
@@ -89,6 +102,6 @@ NavigationSnapshot NavigationService::getSnapshot(const NavigationHeading &headi
     snapshot.bearingValid = geometry.bearingValid;
     snapshot.arrowValid = geometry.relativeBearingValid;
     if (snapshot.arrowValid)
-        snapshot.headingSource = heading.source;
+        snapshot.headingSource = evaluatedHeading.heading.source;
     return snapshot;
 }

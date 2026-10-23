@@ -1,12 +1,14 @@
 // NavigationService in src/navigation/NavigationService.cpp joins real NodeDB positions with
 // PositionFreshnessTracker and NavigationCalculator. Only current coordinate reports may drive
 // navigation: telemetry, cached positions and invalid headings must not create a live arrow.
-// These tests guard target-switch leakage, stale-coordinate revival and time-only refresh bugs.
+// These tests guard target-switch leakage, stale-coordinate revival, time-only refresh bugs and
+// invalid/expired sensor measurements leaking through the service into NavigationPresenter.
 #include "MeshTypes.h"
 #include "TestUtil.h"
 #include "UptimeClock.h"
 #include "mesh/NodeDB.h"
 #include "navigation/NavigationService.h"
+#include "navigation/NavigationViewModel.h"
 #include <cmath>
 #include <cstdlib>
 #include <memory>
@@ -37,9 +39,15 @@ meshtastic_Position position(int32_t latitude = 410000000, int32_t longitude = 2
     return result;
 }
 
-NavigationHeading heading(float degrees = 0.0f)
+NavigationHeadingSample heading(float degrees = 0.0f)
 {
-    return {.degrees = degrees, .source = NavigationHeadingSource::MAGNETOMETER, .valid = true};
+    NavigationHeadingSample sample;
+    sample.degrees = degrees;
+    sample.source = NavigationHeadingSource::MAGNETOMETER;
+    sample.reference = NavigationHeadingReference::TRUE_NORTH;
+    sample.measuredAtUptimeMs = Time::getMillisMonotonic();
+    sample.timeKnown = sample.measurementValid = sample.calibrationValid = sample.deviceOrientationValid = true;
+    return sample;
 }
 
 void seedPositions()
@@ -140,8 +148,96 @@ static void test_snapshot_neverReusesPreviousHeading()
     TEST_ASSERT_FALSE(noHeading.arrowValid);
     TEST_ASSERT_EQUAL(NavigationHeadingSource::NONE, noHeading.headingSource);
     TEST_ASSERT_FALSE(navigation->getSnapshot(heading(NAN)).arrowValid);
-    NavigationHeading movement{.degrees = 90, .source = NavigationHeadingSource::MOVEMENT_COURSE, .valid = true};
+    auto movement = heading(90);
+    movement.source = NavigationHeadingSource::MOVEMENT_COURSE;
+    movement.fixValid = movement.speedValid = movement.speedTimeKnown = true;
+    movement.speedMetersPerSecond = 2;
+    movement.speedMeasuredAtUptimeMs = movement.measuredAtUptimeMs;
     TEST_ASSERT_EQUAL(NavigationHeadingSource::MOVEMENT_COURSE, navigation->getSnapshot(movement).headingSource);
+}
+
+static void test_heading_expiryHidesArrowButPreservesDistanceAndNorthBearing()
+{
+    seedPositions();
+    const auto sample = heading(90);
+    auto snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_TRUE(NavigationPresenter::present(snapshot).showArrow);
+    Time::advanceTestMillis(1999);
+    TEST_ASSERT_TRUE(navigation->getSnapshot(sample).arrowValid);
+    Time::advanceTestMillis(1);
+    snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::STALE, snapshot.headingState);
+    TEST_ASSERT_EQUAL_UINT64(2000, snapshot.headingAgeMillis);
+    TEST_ASSERT_TRUE(snapshot.headingAgeKnown);
+    TEST_ASSERT_TRUE(snapshot.distanceValid);
+    TEST_ASSERT_TRUE(snapshot.bearingValid);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    TEST_ASSERT_FALSE(NavigationPresenter::present(snapshot).showArrow);
+    TEST_ASSERT_TRUE(navigation->getSnapshot(heading()).arrowValid);
+}
+
+static void test_heading_unverifiedSensorNeverEnablesArrow()
+{
+    seedPositions();
+    auto sample = heading();
+    sample.calibrationValid = false;
+    auto snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::UNCALIBRATED, snapshot.headingState);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    sample.calibrationValid = true;
+    sample.reference = NavigationHeadingReference::MAGNETIC_NORTH;
+    snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::REFERENCE_UNVERIFIED, snapshot.headingState);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    TEST_ASSERT_TRUE(snapshot.distanceValid);
+}
+
+static void test_heading_stoppedMovementDoesNotReuseMovingArrow()
+{
+    seedPositions();
+    auto sample = heading(90);
+    sample.source = NavigationHeadingSource::MOVEMENT_COURSE;
+    sample.fixValid = sample.speedValid = sample.speedTimeKnown = true;
+    sample.speedMetersPerSecond = 2;
+    sample.speedMeasuredAtUptimeMs = sample.measuredAtUptimeMs;
+    TEST_ASSERT_TRUE(navigation->getSnapshot(sample).arrowValid);
+    sample.speedMetersPerSecond = 0;
+    const auto snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::LOW_SPEED, snapshot.headingState);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    TEST_ASSERT_EQUAL(NavigationHeadingSource::NONE, snapshot.headingSource);
+    TEST_ASSERT_TRUE(snapshot.distanceValid);
+}
+
+static void test_heading_invalidPolicyPreservesPreviousPolicy()
+{
+    seedPositions();
+    NavigationHeadingPolicy policy;
+    policy.maxAgeMillis = 1000;
+    TEST_ASSERT_TRUE(navigation->setHeadingPolicy(policy));
+    policy.maxAgeMillis = 0;
+    TEST_ASSERT_FALSE(navigation->setHeadingPolicy(policy));
+    const auto sample = heading();
+    Time::advanceTestMillis(1000);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::STALE, navigation->getSnapshot(sample).headingState);
+}
+
+static void test_heading_millisWrapPreservesAgeAndExpiry()
+{
+    Time::setTestMillis(UINT32_MAX - 500);
+    Time::serviceMonotonic();
+    seedPositions();
+    const auto sample = heading();
+    Time::advanceTestMillis(1000);
+    auto snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_TRUE(snapshot.arrowValid);
+    TEST_ASSERT_EQUAL_UINT64(1000, snapshot.headingAgeMillis);
+    Time::advanceTestMillis(1000);
+    snapshot = navigation->getSnapshot(sample);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    TEST_ASSERT_TRUE(snapshot.distanceValid);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::STALE, snapshot.headingState);
+    TEST_ASSERT_EQUAL_UINT64(2000, snapshot.headingAgeMillis);
 }
 
 static void test_snapshot_warningAndStaleBoundaries()
@@ -287,6 +383,11 @@ extern "C" void setup()
     RUN_TEST(test_snapshot_requiresBothPositions);
     RUN_TEST(test_snapshot_computesDistanceAndRelativeArrow);
     RUN_TEST(test_snapshot_neverReusesPreviousHeading);
+    RUN_TEST(test_heading_expiryHidesArrowButPreservesDistanceAndNorthBearing);
+    RUN_TEST(test_heading_unverifiedSensorNeverEnablesArrow);
+    RUN_TEST(test_heading_stoppedMovementDoesNotReuseMovingArrow);
+    RUN_TEST(test_heading_invalidPolicyPreservesPreviousPolicy);
+    RUN_TEST(test_heading_millisWrapPreservesAgeAndExpiry);
     RUN_TEST(test_snapshot_warningAndStaleBoundaries);
     RUN_TEST(test_snapshot_telemetryAndTimeOnlyPacketsDoNotRefreshPosition);
     RUN_TEST(test_selection_switchDoesNotReuseOldGeometry);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "concurrency/Lock.h"
+#include "navigation/NavigationHeadingValidator.h"
 #include "navigation/NavigationTypes.h"
 #include "navigation/PositionFreshnessTracker.h"
 
@@ -15,8 +16,9 @@ class NavigationService
     void clearTarget();
     uint32_t getTarget() const;
     bool setFreshnessPolicies(const PositionFreshnessPolicy &local, const PositionFreshnessPolicy &target);
-    // Supply a current, validated heading on each read; the service never caches a compass reading.
-    NavigationSnapshot getSnapshot(const NavigationHeading &heading = {}) const;
+    bool setHeadingPolicy(const NavigationHeadingPolicy &policy);
+    // Supply measurement metadata on every read; no cached heading or caller-only valid flag bypasses validation.
+    NavigationSnapshot getSnapshot(const NavigationHeadingSample &heading = {}) const;
 
   private:
     NodeDB &database;
@@ -24,6 +26,7 @@ class NavigationService
     uint32_t targetNode = 0;
     PositionFreshnessPolicy localPolicy;
     PositionFreshnessPolicy targetPolicy;
+    NavigationHeadingPolicy headingPolicy;
 };
 
 extern NavigationService *navigationService;

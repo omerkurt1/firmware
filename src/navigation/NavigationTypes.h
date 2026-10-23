@@ -18,6 +18,26 @@ enum class NavigationHeadingSource : uint8_t {
     NONE,
 };
 
+enum class NavigationHeadingState : uint8_t {
+    NO_SAMPLE,
+    READY,
+    INVALID_POLICY,
+    INVALID_SOURCE,
+    INVALID_SAMPLE,
+    TIME_UNKNOWN,
+    FUTURE_SAMPLE,
+    STALE,
+    REFERENCE_UNVERIFIED,
+    UNCALIBRATED,
+    ORIENTATION_UNVERIFIED,
+    INVALID_FIX,
+    INVALID_SPEED,
+    SPEED_TIME_UNKNOWN,
+    SPEED_STALE,
+    SPEED_UNSYNCHRONIZED,
+    LOW_SPEED,
+};
+
 struct NavigationCoordinate {
     int32_t latitudeI = 0;
     int32_t longitudeI = 0;
@@ -42,6 +62,9 @@ struct NavigationSnapshot {
     uint32_t targetNode = 0;
     NavigationPositionState positionState = NavigationPositionState::POSITION_AGE_UNKNOWN;
     NavigationHeadingSource headingSource = NavigationHeadingSource::NONE;
+    NavigationHeadingState headingState = NavigationHeadingState::NO_SAMPLE;
+    uint64_t headingAgeMillis = 0;
+    bool headingAgeKnown = false;
     float distanceMeters = 0.0f;
     float absoluteBearingDegrees = 0.0f;
     float relativeBearingDegrees = 0.0f;
