@@ -8,10 +8,12 @@
 #include "GpioLogic.h"
 #include "Observer.h"
 #include "TinyGPS++.h"
+#include "concurrency/Lock.h"
 #include "concurrency/OSThread.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
 #include "modules/PositionModule.h"
+#include "navigation/NavigationGnssRmcReader.h"
 
 #ifdef SENSECAP_INDICATOR
 #include "mesh/comms/UARTProxy.h"
@@ -140,6 +142,9 @@ class GPS : private concurrency::OSThread
     /// Return true if we are connected to a GPS
     bool isConnected() const { return hasGPS; }
 
+    // Diagnostic observation only; receipt time does not establish measurement freshness.
+    NavigationGnssObservation copyNavigationCourse() const;
+
     bool isPowerSaving() const { return config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_ENABLED; }
 
     // Empty the input buffer as quickly as possible
@@ -197,6 +202,8 @@ class GPS : private concurrency::OSThread
     GnssModel_t cachedProbeModel = GNSS_MODEL_UNKNOWN;
 
     TinyGPSPlus reader;
+    NavigationGnssRmcReader navigationCourseReader;
+    mutable concurrency::Lock navigationCourseMutex;
     uint8_t fixQual = 0; // fix quality from GPGGA
     uint32_t lastChecksumFailCount = 0;
     uint8_t currentStep = 0;

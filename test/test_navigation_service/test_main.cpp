@@ -7,6 +7,7 @@
 #include "TestUtil.h"
 #include "UptimeClock.h"
 #include "mesh/NodeDB.h"
+#include "navigation/NavigationGnssRmcReader.h"
 #include "navigation/NavigationService.h"
 #include "navigation/NavigationViewModel.h"
 #include <cmath>
@@ -154,6 +155,22 @@ static void test_snapshot_neverReusesPreviousHeading()
     movement.speedMetersPerSecond = 2;
     movement.speedMeasuredAtUptimeMs = movement.measuredAtUptimeMs;
     TEST_ASSERT_EQUAL(NavigationHeadingSource::MOVEMENT_COURSE, navigation->getSnapshot(movement).headingSource);
+}
+
+static void test_heading_rmc_receipt_does_not_enable_arrow()
+{
+    seedPositions();
+    NavigationGnssRmcReader reader;
+    const char *sentence = "$GPRMC,083559.00,A,4717.11437,N,00833.91522,E,0.004,77.52,091202,,,A,V*2D\r\n";
+    for (const char *p = sentence; *p; ++p)
+        reader.encode(*p, Time::getMillisMonotonic());
+    const auto observation = reader.copyObservation();
+    TEST_ASSERT_TRUE(observation.received);
+    const auto result = navigation->getSnapshot(observation.heading);
+    TEST_ASSERT_EQUAL(NavigationHeadingState::TIME_UNKNOWN, result.headingState);
+    TEST_ASSERT_TRUE(result.distanceValid);
+    TEST_ASSERT_TRUE(result.bearingValid);
+    TEST_ASSERT_FALSE(result.arrowValid);
 }
 
 static void test_heading_expiryHidesArrowButPreservesDistanceAndNorthBearing()
@@ -383,6 +400,7 @@ extern "C" void setup()
     RUN_TEST(test_snapshot_requiresBothPositions);
     RUN_TEST(test_snapshot_computesDistanceAndRelativeArrow);
     RUN_TEST(test_snapshot_neverReusesPreviousHeading);
+    RUN_TEST(test_heading_rmc_receipt_does_not_enable_arrow);
     RUN_TEST(test_heading_expiryHidesArrowButPreservesDistanceAndNorthBearing);
     RUN_TEST(test_heading_unverifiedSensorNeverEnablesArrow);
     RUN_TEST(test_heading_stoppedMovementDoesNotReuseMovingArrow);

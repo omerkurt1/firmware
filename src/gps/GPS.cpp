@@ -12,6 +12,7 @@
 #include "Throttle.h"
 #include "UptimeClock.h"
 #include "buzz.h"
+#include "concurrency/LockGuard.h"
 #include "concurrency/Periodic.h"
 #include "gps/RTC.h"
 #include "meshUtils.h"
@@ -1222,6 +1223,10 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
 {
     // Update the stored GPSPowerstate, and create local copies
     GPSPowerState oldState = powerState;
+    if (newState != GPS_ACTIVE || oldState != GPS_ACTIVE) {
+        concurrency::LockGuard guard(&navigationCourseMutex);
+        navigationCourseReader.reset();
+    }
     powerState = newState;
     LOG_INFO("GPS power state %s -> %s", getGPSPowerStateString(oldState), getGPSPowerStateString(newState));
 
@@ -1734,6 +1739,10 @@ int32_t GPS::runOnce()
 // clear the GPS rx/tx buffer as quickly as possible
 void GPS::clearBuffer()
 {
+    {
+        concurrency::LockGuard guard(&navigationCourseMutex);
+        navigationCourseReader.reset();
+    }
 #ifdef ARCH_ESP32
     _serial_gps->flush(false);
 #else
@@ -2397,6 +2406,10 @@ bool GPS::whileActive()
         debugmsg += vformat("%c", (c >= 32 && c <= 126) ? c : '.');
 #endif
         isValid |= reader.encode(c);
+        {
+            concurrency::LockGuard guard(&navigationCourseMutex);
+            navigationCourseReader.encode(static_cast<char>(c), Time::getMillisMonotonic());
+        }
         if (charsInBuf > sizeof(UBXscratch) - 10 || c == '\r') {
             if (strnstr((char *)UBXscratch, "$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50", charsInBuf)) {
                 rebootsSeen++;
@@ -2413,6 +2426,12 @@ bool GPS::whileActive()
 #endif
     return isValid;
 }
+NavigationGnssObservation GPS::copyNavigationCourse() const
+{
+    concurrency::LockGuard guard(&navigationCourseMutex);
+    return navigationCourseReader.copyObservation();
+}
+
 void GPS::enable()
 {
     // Clear the old scheduling info (reset the lock-time prediction)
