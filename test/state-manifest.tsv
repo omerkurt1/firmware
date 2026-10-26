@@ -46,6 +46,7 @@
 # stopped running, not a drift of a few hundred lines.
 #
 # suite	flags	reason
+test_camp_point	writes=camp_point.dat	per-test camp persistence fixtures exercise committed replacement, deletion, corruption and interrupted staging; temporary fixtures are cleaned within each case
 test_admin_radio	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto,warm.dat,Messages_default.msgs errors=400	per-test NodeDB fixture, and the admin handlers under test persist config, channels and node metadata
 test_admin_session_repro	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	constructs a NodeDB, whose constructor persists a default set when the prefs directory is empty
 test_event_channel_phone_api	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	constructs a NodeDB, whose constructor persists a default set when the prefs directory is empty
