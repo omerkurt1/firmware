@@ -10,6 +10,19 @@ enum class NavigationPositionState : uint8_t {
     TARGET_POSITION_STALE,
     POSITION_AGE_UNKNOWN,
     NO_TARGET_SELECTED,
+    LOCAL_POSITION_NOT_LOCAL,
+};
+
+enum class CampActionStatus : uint8_t {
+    OK,
+    NO_LOCAL_POSITION,
+    LOCAL_POSITION_NOT_FRESH,
+    LOCAL_POSITION_NOT_LOCAL,
+    NO_CAMP,
+    STORAGE_ERROR,
+    CORRUPT,
+    UNSUPPORTED_VERSION,
+    UNAVAILABLE,
 };
 
 enum class NavigationHeadingSource : uint8_t {
@@ -60,6 +73,7 @@ struct NavigationGeometry {
 
 struct NavigationSnapshot {
     uint32_t targetNode = 0;
+    bool targetIsCamp = false;
     NavigationPositionState positionState = NavigationPositionState::POSITION_AGE_UNKNOWN;
     NavigationHeadingSource headingSource = NavigationHeadingSource::NONE;
     NavigationHeadingState headingState = NavigationHeadingState::NO_SAMPLE;

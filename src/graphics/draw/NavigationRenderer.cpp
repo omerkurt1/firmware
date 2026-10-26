@@ -67,7 +67,9 @@ void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16
     const auto view = currentView();
     const uint32_t target = view.targetNode;
     char title[48] = "Find a device";
-    if (target) {
+    if (view.targetIsCamp) {
+        snprintf(title, sizeof(title), "Return to camp");
+    } else if (target) {
         const auto *node = nodeDB ? nodeDB->getMeshNode(target) : nullptr;
         if (node && nodeInfoLiteHasUser(node) && node->long_name[0])
             snprintf(title, sizeof(title), "Find: %s", sanitizeString(node->long_name).c_str());

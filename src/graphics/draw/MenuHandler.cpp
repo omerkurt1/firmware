@@ -59,6 +59,21 @@ namespace graphics
 namespace
 {
 
+const char *campNotice = "Camp ready";
+CampActionStatus campNoticeStatus = CampActionStatus::OK;
+bool pendingCampDelete = false;
+
+void queueCampResult(CampActionStatus status, const char *successMessage)
+{
+    campNoticeStatus = status;
+    campNotice = status == CampActionStatus::OK ? successMessage : NavigationPresenter::campFeedback(status);
+    // Banner callbacks run before their old overlay closes. Display feedback on the next frame
+    // so that closing the menu cannot erase the result, especially a persistence failure.
+    menuHandler::menuQueue = menuHandler::NavigationCampResult;
+    if (screen)
+        screen->runNow();
+}
+
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
 uint32_t selectedGeofenceWaypointId = 0;
 #endif
@@ -1724,20 +1739,22 @@ void menuHandler::navigationMenu()
 {
     if (!navigationService)
         return;
-    if (!navigationService->getTarget()) {
-        menuQueue = NavigationPickerMenu;
-        screen->runNow();
-        return;
-    }
-    static const char *options[] = {"Select target", "Clear target", "Back"};
+    enum { SelectDevice, CampPoint, ClearTarget, Back };
+    static const char *options[] = {"Select device", "Camp point", "Clear target", "Back"};
+    static const char *emptyOptions[] = {"Select device", "Camp point", "Back"};
+    static const int emptyActions[] = {SelectDevice, CampPoint, Back};
+    const bool hasTarget = navigationService->getTarget() || navigationService->isCampTarget();
     BannerOverlayOptions bannerOptions;
-    bannerOptions.message = "Find a device";
-    bannerOptions.optionsArrayPtr = options;
-    bannerOptions.optionsCount = 3;
+    bannerOptions.message = "Navigation";
+    bannerOptions.optionsArrayPtr = hasTarget ? options : emptyOptions;
+    bannerOptions.optionsCount = hasTarget ? 4 : 3;
+    bannerOptions.optionsEnumPtr = hasTarget ? nullptr : emptyActions;
     bannerOptions.bannerCallback = [](int selected) {
-        if (selected == 0)
+        if (selected == SelectDevice)
             menuQueue = NavigationPickerMenu;
-        else if (selected == 1 && navigationService)
+        else if (selected == CampPoint)
+            menuQueue = NavigationCampMenu;
+        else if (selected == ClearTarget && navigationService)
             navigationService->clearTarget();
         screen->runNow();
     };
@@ -1752,13 +1769,114 @@ void menuHandler::navigationPicker()
         screen->showSimpleBanner("No other devices\nWait for node data");
         return;
     }
-    screen->showNodePicker("Select target", 30000, [](uint32_t nodeNum) {
+    screen->showNodePicker("Select device", 30000, [](uint32_t nodeNum) {
         if (NavigationRenderer::selectTarget(nodeNum))
             screen->setFrames(Screen::FOCUS_NAVIGATION);
         else
             menuQueue = NavigationUnavailableMenu;
         screen->runNow();
     });
+}
+
+void menuHandler::navigationCampMenu()
+{
+    if (!navigationService || !screen)
+        return;
+    screen->showOverlayBanner(navigationCampOptions());
+}
+
+BannerOverlayOptions menuHandler::navigationCampOptions()
+{
+    enum { GoToCamp, SaveCamp, DeleteCamp, ReloadCamp, Back };
+    static const char *options[] = {"Go to camp", "Save camp", "Delete camp", "Reload camp", "Back"};
+    const auto campStatus = navigationService ? navigationService->getCampStatus() : CampActionStatus::UNAVAILABLE;
+    options[SaveCamp] = campStatus == CampActionStatus::OK ? "Replace camp" : "Save camp";
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Camp point";
+    bannerOptions.optionsArrayPtr = options;
+    bannerOptions.optionsCount = 5;
+    bannerOptions.InitialSelected = campStatus == CampActionStatus::NO_CAMP ? SaveCamp : GoToCamp;
+    bannerOptions.bannerCallback = [](int selected) {
+        if (!navigationService)
+            return;
+        if (selected == GoToCamp) {
+            const auto result = navigationService->selectCamp();
+            if (result == CampActionStatus::OK) {
+                if (screen) {
+                    screen->setFrames(Screen::FOCUS_NAVIGATION);
+                    screen->runNow();
+                }
+            } else {
+                queueCampResult(result, "Returning to camp");
+            }
+        } else if (selected == SaveCamp) {
+            const auto status = navigationService->getCampStatus();
+            if (status == CampActionStatus::UNAVAILABLE || status == CampActionStatus::UNSUPPORTED_VERSION)
+                queueCampResult(status, "Camp saved");
+            else if (status != CampActionStatus::NO_CAMP) {
+                menuQueue = NavigationCampSaveConfirm;
+                if (screen)
+                    screen->runNow();
+            } else {
+                queueCampResult(navigationService->saveCamp(), "Camp saved");
+            }
+        } else if (selected == DeleteCamp) {
+            const auto status = navigationService->getCampStatus();
+            if (status == CampActionStatus::NO_CAMP || status == CampActionStatus::UNAVAILABLE ||
+                status == CampActionStatus::UNSUPPORTED_VERSION)
+                queueCampResult(status, "Camp deleted");
+            else {
+                menuQueue = NavigationCampDeleteConfirm;
+                if (screen)
+                    screen->runNow();
+            }
+        } else if (selected == ReloadCamp) {
+            queueCampResult(navigationService->restoreCamp(), "Camp loaded");
+        } else if (selected == Back) {
+            menuQueue = NavigationRootMenu;
+            if (screen)
+                screen->runNow();
+        }
+    };
+    return bannerOptions;
+}
+
+void menuHandler::navigationCampConfirm(bool deleting)
+{
+    if (screen)
+        screen->showOverlayBanner(navigationCampConfirmation(deleting));
+}
+
+BannerOverlayOptions menuHandler::navigationCampConfirmation(bool deleting)
+{
+    pendingCampDelete = deleting;
+    static const char *saveOptions[] = {"Keep camp", "Replace camp"};
+    static const char *deleteOptions[] = {"Keep camp", "Delete camp"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = deleting ? "Delete saved camp?" : "Replace camp with\nlocal position?";
+    bannerOptions.optionsArrayPtr = deleting ? deleteOptions : saveOptions;
+    bannerOptions.optionsCount = 2;
+    bannerOptions.bannerCallback = [](int selected) {
+        const bool deleting = pendingCampDelete;
+        if (selected == 1 && navigationService) {
+            queueCampResult(deleting ? navigationService->deleteCamp() : navigationService->saveCamp(),
+                            deleting ? "Camp deleted" : "Camp saved");
+        } else if (selected == 0) {
+            menuQueue = NavigationCampMenu;
+            if (screen)
+                screen->runNow();
+        }
+    };
+    return bannerOptions;
+}
+
+BannerOverlayOptions menuHandler::navigationCampFeedback()
+{
+    BannerOverlayOptions options;
+    options.message = campNotice;
+    // Failures need acknowledgement; never dismiss required recovery instructions on a timer.
+    options.durationMs = campNoticeStatus == CampActionStatus::OK ? 3500 : 0;
+    return options;
 }
 
 void menuHandler::manageNodeMenu()
@@ -3364,8 +3482,23 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case NavigationPickerMenu:
         navigationPicker();
         break;
+    case NavigationRootMenu:
+        navigationMenu();
+        break;
     case NavigationUnavailableMenu:
         screen->showSimpleBanner("Target unavailable\nSelect another device", 5000);
+        break;
+    case NavigationCampMenu:
+        navigationCampMenu();
+        break;
+    case NavigationCampSaveConfirm:
+        navigationCampConfirm(false);
+        break;
+    case NavigationCampDeleteConfirm:
+        navigationCampConfirm(true);
+        break;
+    case NavigationCampResult:
+        screen->showOverlayBanner(navigationCampFeedback());
         break;
     case ManageNodeMenu:
         manageNodeMenu();

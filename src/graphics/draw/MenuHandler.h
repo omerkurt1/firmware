@@ -3,6 +3,7 @@
 #include "configuration.h"
 namespace graphics
 {
+struct BannerOverlayOptions;
 
 class menuHandler
 {
@@ -67,7 +68,12 @@ class menuHandler
         HamModeConfirm,
         LicensedToNormalConfirm,
         NavigationPickerMenu,
+        NavigationRootMenu,
         NavigationUnavailableMenu,
+        NavigationCampMenu,
+        NavigationCampSaveConfirm,
+        NavigationCampDeleteConfirm,
+        NavigationCampResult,
 #if HAS_LORA_FEM
         LoraFemLnaToggleMenu
 #endif
@@ -115,6 +121,11 @@ class menuHandler
     static void manageNodeMenu();
     static void navigationMenu();
     static void navigationPicker();
+    static void navigationCampMenu();
+    static void navigationCampConfirm(bool deleting);
+    static BannerOverlayOptions navigationCampOptions();
+    static BannerOverlayOptions navigationCampConfirmation(bool deleting);
+    static BannerOverlayOptions navigationCampFeedback();
     static void addFavoriteMenu();
     static void removeFavoriteMenu();
     static void waypointBaseMenu();

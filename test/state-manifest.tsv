@@ -55,8 +55,8 @@ test_firmware_edition	writes=config.proto,module.proto,device.proto,channels.pro
 test_fuzz_decode	errors=20000..250000	fuzzes protobuf decode; every rejection logs. A collapse to near zero means the corpus stopped reaching the decoder
 test_fuzz_packets	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto,warm.dat,Messages_default.msgs errors=5000..60000	drives decode of fuzzed packets through the real NodeDB and message store
 test_hop_scaling	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	constructs a NodeDB to hold the hop-distance fixtures
-test_navigation_service	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	per-test NodeDB fixtures persist defaults while exercising navigation with real coordinate and telemetry updates
-test_navigation_view	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	per-test real NodeDB fixture for navigation display and selection integration; construction persists default segments
+test_navigation_service	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto,camp_point.dat	per-test NodeDB fixtures and real camp persistence exercise navigation, restart, target switching and deletion
+test_navigation_view	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto,camp_point.dat	per-test real NodeDB and camp persistence fixtures for display, boot restore, target selection and deletion integration
 test_hop_start_policy	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto	constructs a NodeDB (isFromUs needs nodeDB->getNodeNum()), whose constructor persists a default set when the prefs directory is empty
 test_mesh_beacon	writes=module.proto	exercises the beacon's module-config save path
 test_mesh_module	writes=config.proto,module.proto,device.proto,channels.proto,nodes.proto,warm.dat	module framework tests construct a NodeDB

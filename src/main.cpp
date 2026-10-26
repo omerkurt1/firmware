@@ -19,6 +19,7 @@
 #include "UptimeClock.h"
 #include "airtime.h"
 #include "buzz.h"
+#include "navigation/CampPointFileStorage.h"
 #include "navigation/NavigationService.h"
 #include "power/PowerHAL.h"
 
@@ -872,7 +873,14 @@ void setup()
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
+#if HAS_SCREEN
+    static CampPointFileStorage campFiles;
+    static CampPointStore campStore(campFiles);
+    navigationService = new NavigationService(*nodeDB, &campStore);
+    navigationService->restoreCamp();
+#else
     navigationService = new NavigationService(*nodeDB);
+#endif
 #endif
 #ifdef ARCH_ESP32
     // Config is loaded now, and Bluetooth has not been initialized yet. If the

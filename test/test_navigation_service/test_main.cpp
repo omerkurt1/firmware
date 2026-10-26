@@ -3,15 +3,18 @@
 // navigation: telemetry, cached positions and invalid headings must not create a live arrow.
 // These tests guard target-switch leakage, stale-coordinate revival, time-only refresh bugs and
 // invalid/expired sensor measurements leaking through the service into NavigationPresenter.
+#include "FSCommon.h"
 #include "MeshTypes.h"
 #include "TestUtil.h"
 #include "UptimeClock.h"
 #include "mesh/NodeDB.h"
+#include "navigation/CampPointFileStorage.h"
 #include "navigation/NavigationGnssRmcReader.h"
 #include "navigation/NavigationService.h"
 #include "navigation/NavigationViewModel.h"
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <unity.h>
 
@@ -29,6 +32,46 @@ meshtastic_ChannelFile savedChannels;
 meshtastic_Position savedPosition;
 std::unique_ptr<NodeDB> database;
 std::unique_ptr<NavigationService> navigation;
+
+class CampMemory : public CampPointStorage
+{
+  public:
+    uint8_t bytes[RECORD_SIZE] = {};
+    bool present = false;
+    bool failWrite = false;
+    bool loseAcknowledgement = false;
+    unsigned readFailures = 0;
+    unsigned reads = 0;
+    unsigned writes = 0;
+    CampPointStatus readStatus = CampPointStatus::OK;
+    CampPointStatus read(uint8_t *record) override
+    {
+        ++reads;
+        if (readFailures) {
+            --readFailures;
+            return CampPointStatus::IO_ERROR;
+        }
+        if (readStatus != CampPointStatus::OK)
+            return readStatus;
+        if (!present)
+            return CampPointStatus::EMPTY;
+        memcpy(record, bytes, RECORD_SIZE);
+        return CampPointStatus::OK;
+    }
+    CampPointStatus write(const uint8_t *record) override
+    {
+        ++writes;
+        if (failWrite)
+            return CampPointStatus::IO_ERROR;
+        memcpy(bytes, record, RECORD_SIZE);
+        present = true;
+        if (loseAcknowledgement)
+            readFailures = 1;
+        return CampPointStatus::OK;
+    }
+};
+CampMemory campMemory;
+CampPointStore campStore(campMemory);
 
 meshtastic_Position position(int32_t latitude = 410000000, int32_t longitude = 290000000)
 {
@@ -82,7 +125,10 @@ void setUp()
     nodeDB = database.get();
     for (const auto num : database->snapshotPositionNodeNums(0))
         database->eraseNodeSatellites(num);
-    navigation = std::make_unique<NavigationService>(*database);
+    config.position.fixed_position = false;
+    campMemory = {};
+    navigation = std::make_unique<NavigationService>(*database, &campStore);
+    navigation->restoreCamp();
     Time::resetMonotonicForTests();
     Time::setTestMillis(100000);
 }
@@ -386,6 +432,222 @@ static void test_copyPosition_missingEntryClearsOutputs()
     TEST_ASSERT_EQUAL_INT32(0, copied.latitude_i);
     TEST_ASSERT_FALSE(freshness.ageKnown);
 }
+
+static void test_camp_empty_or_unsupported_backend_preserves_device_target()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_CAMP, navigation->selectCamp());
+    TEST_ASSERT_EQUAL_UINT32(TARGET_A, navigation->getTarget());
+    NavigationService unavailable(*database);
+    TEST_ASSERT_TRUE(unavailable.selectTarget(TARGET_A));
+    TEST_ASSERT_EQUAL(CampActionStatus::UNAVAILABLE, unavailable.restoreCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::UNAVAILABLE, unavailable.saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::UNAVAILABLE, unavailable.deleteCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::UNAVAILABLE, unavailable.selectCamp());
+    TEST_ASSERT_EQUAL_UINT32(TARGET_A, unavailable.getTarget());
+}
+
+static void test_camp_capture_rejects_unusable_local_reports_without_writing()
+{
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_LOCAL_POSITION, navigation->saveCamp());
+    for (const auto source : {RX_SRC_USER, RX_SRC_RADIO}) {
+        database->updatePosition(database->getNodeNum(), position(), source);
+        TEST_ASSERT_EQUAL(CampActionStatus::LOCAL_POSITION_NOT_LOCAL, navigation->saveCamp());
+    }
+    database->eraseNodeSatellites(database->getNodeNum());
+    meshtastic_PositionLite cached{};
+    cached.latitude_i = 410000000;
+    cached.longitude_i = 290000000;
+    database->nodePositions[database->getNodeNum()] = cached;
+    TEST_ASSERT_EQUAL(CampActionStatus::LOCAL_POSITION_NOT_LOCAL, navigation->saveCamp());
+    database->updatePosition(database->getNodeNum(), position(), RX_SRC_LOCAL);
+    config.position.fixed_position = true;
+    TEST_ASSERT_EQUAL(CampActionStatus::LOCAL_POSITION_NOT_LOCAL, navigation->saveCamp());
+    config.position.fixed_position = false;
+    database->updatePosition(database->getNodeNum(), position(910000000), RX_SRC_LOCAL);
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_LOCAL_POSITION, navigation->saveCamp());
+    TEST_ASSERT_EQUAL_UINT32(0, campMemory.writes);
+}
+
+static void test_camp_capture_age_limit_is_independent_of_navigation_policy()
+{
+    database->updatePosition(database->getNodeNum(), position(), RX_SRC_LOCAL);
+    TEST_ASSERT_TRUE(navigation->setFreshnessPolicies({1000, 2000}, {1000, 2000}));
+    Time::advanceTestMillis(29000);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    Time::advanceTestMillis(1000);
+    TEST_ASSERT_EQUAL(CampActionStatus::LOCAL_POSITION_NOT_FRESH, navigation->saveCamp());
+    meshtastic_Position timeOnly{};
+    timeOnly.time = 1800000000;
+    database->updatePosition(database->getNodeNum(), timeOnly, RX_SRC_USER);
+    TEST_ASSERT_EQUAL(CampActionStatus::LOCAL_POSITION_NOT_FRESH, navigation->saveCamp());
+    TEST_ASSERT_EQUAL_UINT32(1, campMemory.writes);
+}
+
+static void test_camp_save_and_target_switch_do_not_erase_each_other()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL_UINT32(TARGET_A, navigation->getTarget());
+    TEST_ASSERT_FALSE(navigation->isCampTarget());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    TEST_ASSERT_TRUE(navigation->isCampTarget());
+    TEST_ASSERT_EQUAL_UINT32(0, navigation->getTarget());
+    TEST_ASSERT_TRUE(navigation->getSnapshot().targetIsCamp);
+    TEST_ASSERT_FALSE(navigation->selectTarget(NODENUM_BROADCAST));
+    TEST_ASSERT_TRUE(navigation->isCampTarget());
+    TEST_ASSERT_TRUE(navigation->selectTarget(TARGET_B));
+    TEST_ASSERT_FALSE(navigation->getSnapshot().targetIsCamp);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    navigation->clearTarget();
+    TEST_ASSERT_FALSE(navigation->isCampTarget());
+    assertUnavailable(NavigationPositionState::NO_TARGET_SELECTED);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+}
+
+static void test_camp_static_point_does_not_age_with_a_live_local_position()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    Time::advanceTestMillis(86400000);
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_LOCAL);
+    const auto snapshot = navigation->getSnapshot();
+    TEST_ASSERT_EQUAL(NavigationPositionState::READY, snapshot.positionState);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 111.2f, snapshot.distanceMeters);
+    TEST_ASSERT_FALSE(snapshot.targetPositionAgeKnown);
+    TEST_ASSERT_FALSE(snapshot.targetPositionWarning);
+    TEST_ASSERT_FALSE(snapshot.arrowValid);
+    TEST_ASSERT_EQUAL_STRING("Camp saved  Me:0s", NavigationPresenter::present(snapshot).ages);
+}
+
+static void test_camp_stale_or_nonlocal_origin_suppresses_previous_geometry()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    Time::advanceTestMillis(600000);
+    assertUnavailable(NavigationPositionState::LOCAL_POSITION_STALE);
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_USER);
+    assertUnavailable(NavigationPositionState::LOCAL_POSITION_NOT_LOCAL);
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_LOCAL);
+    TEST_ASSERT_TRUE(navigation->getSnapshot().distanceValid);
+    database->clearLocalPosition();
+    assertUnavailable(NavigationPositionState::NO_LOCAL_POSITION);
+}
+
+static void test_camp_failed_write_keeps_committed_point_and_device_selection()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_LOCAL);
+    campMemory.failWrite = true;
+    TEST_ASSERT_EQUAL(CampActionStatus::STORAGE_ERROR, navigation->saveCamp());
+    TEST_ASSERT_EQUAL_UINT32(TARGET_A, navigation->getTarget());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 111.2f, navigation->getSnapshot().distanceMeters);
+    TEST_ASSERT_EQUAL(CampActionStatus::STORAGE_ERROR, navigation->deleteCamp());
+    TEST_ASSERT_TRUE(navigation->isCampTarget());
+}
+
+static void test_camp_unconfirmed_save_reloads_the_actual_committed_point()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_LOCAL);
+    campMemory.loseAcknowledgement = true;
+    TEST_ASSERT_EQUAL(CampActionStatus::STORAGE_ERROR, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->getCampStatus());
+    TEST_ASSERT_TRUE(navigation->isCampTarget());
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, navigation->getSnapshot().distanceMeters);
+}
+
+static void test_camp_unconfirmed_delete_never_revives_the_old_point()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    campMemory.loseAcknowledgement = true;
+    TEST_ASSERT_EQUAL(CampActionStatus::STORAGE_ERROR, navigation->deleteCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_CAMP, navigation->selectCamp());
+    assertUnavailable(NavigationPositionState::NO_TARGET_SELECTED);
+}
+
+static void test_camp_reload_failures_invalidate_cached_target_until_explicit_selection()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    for (const auto status : {CampPointStatus::IO_ERROR, CampPointStatus::CORRUPT, CampPointStatus::UNSUPPORTED_VERSION,
+                              CampPointStatus::UNAVAILABLE}) {
+        campMemory.readStatus = CampPointStatus::OK;
+        TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->restoreCamp());
+        TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+        campMemory.readStatus = status;
+        TEST_ASSERT_NOT_EQUAL(CampActionStatus::OK, navigation->restoreCamp());
+        TEST_ASSERT_NOT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+        assertUnavailable(NavigationPositionState::NO_TARGET_SELECTED);
+    }
+    campMemory.readStatus = CampPointStatus::OK;
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->restoreCamp());
+    TEST_ASSERT_FALSE(navigation->isCampTarget());
+}
+
+static void test_camp_render_reads_only_cached_state()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->selectCamp());
+    const auto reads = campMemory.reads;
+    const auto writes = campMemory.writes;
+    for (unsigned frame = 0; frame < 20; ++frame) {
+        navigation->getSnapshot();
+        navigation->getCampStatus();
+        navigation->isCampTarget();
+    }
+    TEST_ASSERT_EQUAL_UINT32(reads, campMemory.reads);
+    TEST_ASSERT_EQUAL_UINT32(writes, campMemory.writes);
+}
+
+static void test_camp_delete_keeps_device_selection_and_needs_no_gps()
+{
+    seedPositions();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->saveCamp());
+    database->clearLocalPosition();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, navigation->deleteCamp());
+    TEST_ASSERT_EQUAL_UINT32(TARGET_A, navigation->getTarget());
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_CAMP, navigation->getCampStatus());
+}
+
+static void test_camp_filesystem_reboot_return_and_delete_flow()
+{
+    if (FSCom.exists("/prefs/camp_point.dat"))
+        TEST_ASSERT_TRUE(FSCom.remove("/prefs/camp_point.dat"));
+    CampPointFileStorage files;
+    CampPointStore persistent(files);
+    NavigationService firstBoot(*database, &persistent);
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_CAMP, firstBoot.restoreCamp());
+    database->updatePosition(database->getNodeNum(), position(), RX_SRC_LOCAL);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, firstBoot.saveCamp());
+    TEST_ASSERT_TRUE(firstBoot.selectTarget(TARGET_A));
+    CampPointFileStorage reopened;
+    CampPointStore reopenedStore(reopened);
+    NavigationService secondBoot(*database, &reopenedStore);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, secondBoot.restoreCamp());
+    TEST_ASSERT_FALSE(secondBoot.isCampTarget());
+    TEST_ASSERT_EQUAL_UINT32(0, secondBoot.getTarget());
+    database->clearLocalPosition();
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, secondBoot.selectCamp());
+    TEST_ASSERT_FALSE(NavigationPresenter::present(secondBoot.getSnapshot()).showDistance);
+    database->updatePosition(database->getNodeNum(), position(410010000), RX_SRC_LOCAL);
+    const auto view = NavigationPresenter::present(secondBoot.getSnapshot());
+    TEST_ASSERT_TRUE(view.targetIsCamp);
+    TEST_ASSERT_TRUE(view.showDistance);
+    TEST_ASSERT_FALSE(view.showArrow);
+    TEST_ASSERT_EQUAL(CampActionStatus::OK, secondBoot.deleteCamp());
+    NavigationService thirdBoot(*database, &reopenedStore);
+    TEST_ASSERT_EQUAL(CampActionStatus::NO_CAMP, thirdBoot.restoreCamp());
+}
 #else
 void setUp() {}
 void tearDown() {}
@@ -416,6 +678,19 @@ extern "C" void setup()
     RUN_TEST(test_snapshot_cachedCoordinatesHaveUnknownAge);
     RUN_TEST(test_snapshot_millisWrapDoesNotMakePositionStale);
     RUN_TEST(test_copyPosition_missingEntryClearsOutputs);
+    RUN_TEST(test_camp_empty_or_unsupported_backend_preserves_device_target);
+    RUN_TEST(test_camp_capture_rejects_unusable_local_reports_without_writing);
+    RUN_TEST(test_camp_capture_age_limit_is_independent_of_navigation_policy);
+    RUN_TEST(test_camp_save_and_target_switch_do_not_erase_each_other);
+    RUN_TEST(test_camp_static_point_does_not_age_with_a_live_local_position);
+    RUN_TEST(test_camp_stale_or_nonlocal_origin_suppresses_previous_geometry);
+    RUN_TEST(test_camp_failed_write_keeps_committed_point_and_device_selection);
+    RUN_TEST(test_camp_unconfirmed_save_reloads_the_actual_committed_point);
+    RUN_TEST(test_camp_unconfirmed_delete_never_revives_the_old_point);
+    RUN_TEST(test_camp_reload_failures_invalidate_cached_target_until_explicit_selection);
+    RUN_TEST(test_camp_render_reads_only_cached_state);
+    RUN_TEST(test_camp_delete_keeps_device_selection_and_needs_no_gps);
+    RUN_TEST(test_camp_filesystem_reboot_return_and_delete_flow);
 #endif
     exit(UNITY_END());
 }

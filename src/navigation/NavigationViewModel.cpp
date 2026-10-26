@@ -20,20 +20,47 @@ void formatAge(char *out, size_t size, bool known, uint32_t seconds)
 }
 } // namespace
 
+const char *NavigationPresenter::campFeedback(CampActionStatus status)
+{
+    switch (status) {
+    case CampActionStatus::OK:
+        return "Camp ready";
+    case CampActionStatus::NO_CAMP:
+        return "No camp saved\nChoose Save camp";
+    case CampActionStatus::NO_LOCAL_POSITION:
+    case CampActionStatus::LOCAL_POSITION_NOT_FRESH:
+        return "Fresh GPS needed\nWait, then retry";
+    case CampActionStatus::LOCAL_POSITION_NOT_LOCAL:
+        return "Use local GPS\nCheck GPS settings";
+    case CampActionStatus::CORRUPT:
+        return "Camp data damaged\nSave or delete camp";
+    case CampActionStatus::UNSUPPORTED_VERSION:
+        return "Newer camp data\nUpdate firmware";
+    case CampActionStatus::UNAVAILABLE:
+        return "Camp not supported\nOn this firmware";
+    default:
+        return "Camp update failed\nReload, then retry";
+    }
+}
+
 NavigationViewModel NavigationPresenter::present(const NavigationSnapshot &snapshot, bool imperial)
 {
     NavigationViewModel view;
     view.targetNode = snapshot.targetNode;
+    view.targetIsCamp = snapshot.targetIsCamp;
     if (snapshot.positionState == NavigationPositionState::NO_TARGET_SELECTED) {
         snprintf(view.primary, sizeof(view.primary), "No target");
-        snprintf(view.detail, sizeof(view.detail), "Hold: select target");
+        snprintf(view.detail, sizeof(view.detail), "Hold: navigation");
         return view;
     }
 
     char localAge[16], targetAge[16];
     formatAge(localAge, sizeof(localAge), snapshot.localPositionAgeKnown, snapshot.localPositionAgeSeconds);
     formatAge(targetAge, sizeof(targetAge), snapshot.targetPositionAgeKnown, snapshot.targetPositionAgeSeconds);
-    snprintf(view.ages, sizeof(view.ages), "Target:%s  Me:%s", targetAge, localAge);
+    if (snapshot.targetIsCamp)
+        snprintf(view.ages, sizeof(view.ages), "Camp saved  Me:%s", localAge);
+    else
+        snprintf(view.ages, sizeof(view.ages), "Target:%s  Me:%s", targetAge, localAge);
 
     const char *primary = nullptr;
     const char *detail = "Wait for position";
@@ -41,6 +68,10 @@ NavigationViewModel NavigationPresenter::present(const NavigationSnapshot &snaps
     case NavigationPositionState::NO_LOCAL_POSITION:
         primary = "No local position";
         detail = "Check GPS / sky view";
+        break;
+    case NavigationPositionState::LOCAL_POSITION_NOT_LOCAL:
+        primary = "Local GPS needed";
+        detail = "Use live local GPS";
         break;
     case NavigationPositionState::NO_TARGET_POSITION:
         primary = "No target position";
