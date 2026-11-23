@@ -27,6 +27,7 @@ permissions: read-all
 
 jobs:
   find-targets:
+    if: github.repository == 'meshtastic/firmware'
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +76,7 @@ jobs:
       arch: ${{ steps.jsonStep.outputs.arch }}
 
   version:
-    if: ${{ inputs.target != '' }}
+    if: github.repository == 'meshtastic/firmware' && inputs.target != ''
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7

@@ -18,7 +18,7 @@
 > | New module skeleton                         | inherit `ProtobufModule<T>` in `src/mesh/ProtobufModule.h` |
 > | Observer / event wiring                     | `src/Observer.h`                                           |
 
-This repository is the [Meshtastic](https://meshtastic.org) firmware - a C++17 embedded codebase targeting ESP32 / nRF52 / RP2040 / STM32WL / Linux-Portduino LoRa mesh radios. The Python MCP server that AI agents use to flash, configure, and test connected devices now lives in its own repo, [meshtastic/meshtastic-mcp](https://github.com/meshtastic/meshtastic-mcp); this repo registers it via `.mcp.json` (run through `uvx`) so its tools are available automatically.
+The GPS Tracker product branch of [Meshtastic](https://meshtastic.org) uses C++17 and targets NUCLEO-WB55RG. Native/Portduino environments provide software tests. Hardware test tools live in [meshtastic/meshtastic-mcp](https://github.com/meshtastic/meshtastic-mcp), registered via `.mcp.json`.
 
 ## Primary instruction file
 
@@ -30,7 +30,7 @@ This file (`AGENTS.md`) is a short pointer + quick reference for agents that don
 
 | Action                           | Command                                                                                                                                                               |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build a firmware variant         | `pio run -e <env>` (e.g. `pio run -e rak4631`, `pio run -e heltec-v3`)                                                                                                |
+| Build product firmware           | `pio run` (NUCLEO-WB55RG)                                                                                                                                             |
 | Build native macOS host binary   | `pio run -e native-macos` (Homebrew prereqs + CH341 LoRa setup in `variants/native/portduino/platformio.ini`)                                                         |
 | Clean + rebuild                  | `pio run -e <env> -t clean && pio run -e <env>`                                                                                                                       |
 | Flash a device                   | `pio run -e <env> -t upload --upload-port <port>` (or use the `pio_flash` MCP tool)                                                                                   |
@@ -165,7 +165,7 @@ Sequence these; don't parallelize on the same port.
 
 | Var                                  | Purpose                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MESHTASTIC_MCP_ENV_<ROLE>`          | Override PlatformIO env for a role (e.g. `MESHTASTIC_MCP_ENV_NRF52=rak4631-dap`). Default map: `nrf52→rak4631`, `esp32s3→heltec-v3`.                                                                       |
+| `MESHTASTIC_MCP_ENV_<ROLE>`          | Override the PlatformIO environment for a hardware test role. GPS Tracker uploads use `pio run -t upload` over ST-LINK. |
 | `MESHTASTIC_MCP_SEED`                | PSK seed for the session test profile. Defaults to `mcp-<user>-<host>`.                                                                                                                                    |
 | `MESHTASTIC_MCP_FLASH_LOG`           | File path to tee pio/esptool/nrfutil/picotool output. `run-tests.sh` sets this to `tests/flash.log` so the TUI can stream live flash progress.                                                             |
 | `MESHTASTIC_MCP_TCP_HOST`            | `host` or `host:port` of a `meshtasticd` daemon (e.g. the `native-macos` build). Surfaces it in `list_devices` as `tcp://host:port` so `connect()`-based tools target it transparently. Default port 4403. |

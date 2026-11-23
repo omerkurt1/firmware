@@ -24,7 +24,9 @@
 
 ## Overview
 
-This repository contains the official device firmware for Meshtastic, an open-source LoRa mesh networking project designed for long-range, low-power communication without relying on internet or cellular infrastructure. The firmware supports various hardware platforms, including ESP32, nRF52, RP2040/RP2350, and Linux-based devices.
+The GPS Tracker product branch builds NUCLEO-WB55RG by default with `pio run`. Native/Portduino environments provide the host-side software checks. Use `pio run -t upload` with the board connected over ST-LINK.
+
+This product fork is based on Meshtastic, an open-source LoRa mesh networking project designed for long-range, low-power communication without relying on internet or cellular infrastructure. The upstream project supports a wider range of hardware platforms.
 
 Meshtastic enables text messaging, location sharing, and telemetry over a decentralized mesh network, making it ideal for outdoor adventures, emergency preparedness, and remote operations.
 

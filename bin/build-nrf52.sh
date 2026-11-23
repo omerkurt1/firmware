@@ -47,10 +47,5 @@ if (echo $1 | grep -q "wio-sdk-wm1110"); then
 	cp $SRCHEX $OUTDIR/
 fi
 
-if (echo $1 | grep -q "rak4631"); then
-	echo "Copying .hex file"
-	cp $SRCHEX $OUTDIR/
-fi
-
 echo "Copying manifest"
 cp $BUILDDIR/$basename.mt.json $OUTDIR/$basename.mt.json || true

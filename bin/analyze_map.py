@@ -2,7 +2,7 @@
 """Summarise linker map output to highlight heavy object files and libraries.
 
 Usage:
-    python bin/analyze_map.py --map .pio/build/rak4631/output.map --top 20
+    python bin/analyze_map.py --map ".pio/build/nucleo-wb55rg/firmware-nucleo-wb55rg-<version>.map" --top 20
 
 The script parses GNU ld map files and aggregates section sizes per object file
 and per archive/library, then prints sortable tables that make it easy to spot
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import glob
 import os
 import re
 import sys
@@ -150,11 +151,17 @@ def print_report(map_path: str, top_n: int, per_object: Dict[str, int], per_libr
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Highlight heavy object files from a GNU ld map file.")
-    parser.add_argument("--map", default=".pio/build/rak4631/output.map", help="Path to the map file (default: %(default)s)")
+    parser.add_argument("--map", help="Path to the linker map file (defaults to the latest WB55RG map)")
     parser.add_argument("--top", type=int, default=20, help="Number of entries to display per table (default: %(default)s)")
     args = parser.parse_args()
 
-    map_path = os.path.abspath(args.map)
+    map_path = args.map
+    if map_path is None:
+        maps = glob.glob(".pio/build/nucleo-wb55rg/firmware-nucleo-wb55rg-*.map")
+        if not maps:
+            parser.error("build nucleo-wb55rg first or pass --map")
+        map_path = max(maps, key=os.path.getmtime)
+    map_path = os.path.abspath(map_path)
     repo_root = os.path.abspath(os.getcwd())
 
     per_object, per_library, per_object_sections = parse_map(map_path, repo_root)

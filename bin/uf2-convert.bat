@@ -10,14 +10,14 @@ SET "UF2CONV_CMD=python3 .\bin\uf2conv.py"
 GOTO getopts
 :help
 ECHO.
-ECHO Usage: %SCRIPT_NAME% -t [t-echo^|rak4631^|nano-g2-ultra^|wio-tracker-wm1110^|canaryone^|
-ECHO                                 heltec-mesh-node-t114^|tracker-t1000-e^|rak_wismeshtap^|rak2560^|
+ECHO Usage: %SCRIPT_NAME% -t [t-echo^|nano-g2-ultra^|wio-tracker-wm1110^|canaryone^|
+ECHO                                 heltec-mesh-node-t114^|tracker-t1000-e^|
 ECHO                                 nrf52_promicro_diy_tcxo]
 ECHO.
 ECHO Options:
 ECHO     -t target        Specify a platformio NRF target to build for. (required)
 ECHO.
-ECHO Example: %SCRIPT_NAME% -t rak4631
+ECHO Example: %SCRIPT_NAME% -t t-echo
 GOTO eof
 
 :version
@@ -47,7 +47,7 @@ IF "__!TARGETNAME!__"=="____" (
 
 IF %DEBUG% EQU 1 SET "UF2CONV_CMD=REM python3 .\bin\uf2conv.py"
 
-SET "NRFTARGETS=t-echo rak4631 nano-g2-ultra wio-tracker-wm1110 canaryone heltec-mesh-node-t114 tracker-t1000-e rak_wismeshtap rak2560 nrf52_promicro_diy_tcxo"
+SET "NRFTARGETS=t-echo nano-g2-ultra wio-tracker-wm1110 canaryone heltec-mesh-node-t114 tracker-t1000-e nrf52_promicro_diy_tcxo"
 FOR %%a IN (%NRFTARGETS%) DO (
     IF /I "%%a"=="!TARGETNAME!" (
         @REM We are working with any of %NRFTARGETS%.
@@ -79,7 +79,7 @@ EXIT /B %ERRORLEVEL%
 @REM Also handles %ERRORLEVEL%.
 @REM CALL :RUN_UF2CONV [target]
 @REM.
-@REM Example:: CALL :RUN_UF2CONV rak4631
+@REM Example:: CALL :RUN_UF2CONV t-echo
 IF %DEBUG% EQU 1 CALL :LOG_MESSAGE DEBUG "About to run command: !UF2CONV_CMD! .\.pio\build\%~1\firmware.hex -c -o .\.pio\build\%~1\firmware.uf2 -f 0xADA52840"
 CALL :RESET_ERROR
 !UF2CONV_CMD! .\.pio\build\%~1\firmware.hex -c -o .\.pio\build\%~1\firmware.uf2 -f 0xADA52840
