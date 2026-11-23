@@ -1308,7 +1308,7 @@ void setup()
 uint32_t rebootAtMsec;     // If not zero we will reboot at this time (used to reboot shortly after the update completes)
 uint32_t shutdownAtMsec;   // If not zero we will shutdown at this time (used to shutdown from python or mobile client)
 bool suppressRebootBanner; // If true, suppress "Rebooting..." overlay (used for OTA handoff)
-#ifdef ARCH_STM32
+#ifdef ARCH_STM32WL
 uint32_t enterDfuAtMsec; // If not zero, enter DFU mode at this millis() deadline (see main.h)
 #endif
 
@@ -1387,7 +1387,7 @@ extern meshtastic_DeviceMetadata getDeviceMetadata()
 // Pico W / 2W may get it at some point
 // ESP32-C6 is excluded because we don't have a working bluetooth stack integrated yet.
 // Portduino only has BLE when built against BlueZ/sdbus-c++, so it falls out via !HAS_BLUETOOTH.
-#if defined(ARCH_RP2040) || defined(ARCH_STM32) || defined(CONFIG_IDF_TARGET_ESP32C6) || !HAS_BLUETOOTH
+#if defined(ARCH_RP2040) || defined(ARCH_STM32WL) || defined(CONFIG_IDF_TARGET_ESP32C6) || !HAS_BLUETOOTH
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_BLUETOOTH_CONFIG;
 #endif
 

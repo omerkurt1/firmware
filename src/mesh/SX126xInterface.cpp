@@ -121,8 +121,11 @@ template <typename T> bool SX126xInterface<T>::reinitChip()
     if (power < -9)
         power = -9;
 
-    // FIXME: May want to set depending on a definition, currently all SX126x variant files use the DC-DC regulator option
-    bool useRegulatorLDO = false; // Seems to depend on the connection to pin 9/DCC_SW - if an inductor DCDC?
+#if defined(SX126X_USE_REGULATOR_LDO)
+    constexpr bool useRegulatorLDO = true;
+#else
+    constexpr bool useRegulatorLDO = false;
+#endif
 
     int res = lora.begin(getFreq(), bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage, useRegulatorLDO);
 

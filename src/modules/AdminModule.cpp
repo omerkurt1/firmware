@@ -70,7 +70,7 @@
 
 AdminModule *adminModule;
 
-#ifdef ARCH_STM32
+#ifdef ARCH_STM32WL
 // Client detach window before the DFU jump (see the enter_dfu case).
 static constexpr uint32_t STM32_DFU_DETACH_DELAY_MS = 5000;
 #endif
@@ -623,7 +623,7 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
 #if HAS_SCREEN
         IF_SCREEN(screen->showSimpleBanner("Device is rebooting\ninto DFU mode.", 0));
 #endif
-#if defined(ARCH_STM32)
+#if defined(ARCH_STM32WL)
         // Delay the jump so this ACK reaches the client and it releases the port before the
         // STM32WL ROM bootloader takes the UART and autobauds off the next byte it sees.
         LOG_INFO("Entering DFU in %us - disconnect now", (STM32_DFU_DETACH_DELAY_MS + 999) / 1000);

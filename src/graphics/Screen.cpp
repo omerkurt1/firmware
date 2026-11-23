@@ -48,6 +48,9 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
 #include "draw/NavigationRenderer.h"
+#ifdef ARCH_STM32WB
+#include "platform/stm32wb/AnimalRadio.h"
+#endif
 #include "draw/NodeListRenderer.h"
 #include "draw/NotificationRenderer.h"
 #include "draw/UIRenderer.h"
@@ -123,6 +126,11 @@ namespace graphics
 #define NUM_EXTRA_FRAMES 5 // Includes the product navigation frame.
 #else
 #define NUM_EXTRA_FRAMES 4 // Includes the product navigation frame.
+#endif
+#ifdef ARCH_STM32WB
+constexpr size_t numBoardFrames = 1;
+#else
+constexpr size_t numBoardFrames = 0;
 #endif
 // if defined a pixel will blink to show redraws
 // #define SHOW_REDRAWS
@@ -552,7 +560,7 @@ SPIClass SPI1(HSPI);
 Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_OledType screenType, OLEDDISPLAY_GEOMETRY geometry)
     : concurrency::OSThread("Screen"), address_found(address), model(screenType), geometry(geometry), cmdQueue(32)
 {
-    graphics::normalFrames = new FrameCallback[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
+    graphics::normalFrames = new FrameCallback[MAX_NUM_NODES + NUM_EXTRA_FRAMES + numBoardFrames];
 
 #if defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SH1107_128_64)
     dispdev = new SH1106Wire(address.address, -1, -1, geometry,
@@ -1442,6 +1450,14 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = NavigationRenderer::drawFrame;
         indicatorIcons.push_back(icon_compass);
         PUSH_FRAME_TITLE("Find");
+    }
+#endif
+
+#ifdef ARCH_STM32WB
+    if (NavigationRenderer::supportsDisplay(dispdev)) {
+        normalFrames[numframes++] = wbAnimalRadio::drawFrame;
+        indicatorIcons.push_back(icon_compass);
+        PUSH_FRAME_TITLE("Animal tags");
     }
 #endif
 

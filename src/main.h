@@ -94,7 +94,7 @@ extern uint32_t timeLastPowered;
 extern uint32_t rebootAtMsec;
 extern uint32_t shutdownAtMsec;
 extern bool suppressRebootBanner;
-#ifdef ARCH_STM32
+#ifdef ARCH_STM32WL
 extern uint32_t enterDfuAtMsec; // 0 = unset; else millis() deadline for the deferred DFU jump
 #endif
 

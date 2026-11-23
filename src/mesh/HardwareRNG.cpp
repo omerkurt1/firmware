@@ -19,6 +19,8 @@ extern Adafruit_nRFCrypto nRFCrypto;
 #include <esp_system.h>
 #elif defined(ARCH_RP2040)
 #include <Arduino.h>
+#elif defined(ARCH_STM32WB)
+#include <stm32wbxx_hal_rng.h>
 #elif defined(ARCH_PORTDUINO)
 #include <random>
 #include <unistd.h>
@@ -40,6 +42,7 @@ namespace HardwareRNG
 
 namespace
 {
+#ifndef ARCH_STM32WB
 void fillWithRandomDevice(uint8_t *buffer, size_t length)
 {
     std::random_device rd;
@@ -51,6 +54,41 @@ void fillWithRandomDevice(uint8_t *buffer, size_t length)
         offset += toCopy;
     }
 }
+#else
+bool fillWithStm32wbRng(uint8_t *buffer, size_t length)
+{
+    RCC_OscInitTypeDef oscillator{};
+    oscillator.OscillatorType = RCC_OSCILLATORTYPE_HSI48;
+    oscillator.HSI48State = RCC_HSI48_ON;
+    if (HAL_RCC_OscConfig(&oscillator) != HAL_OK) {
+        return false;
+    }
+    __HAL_RCC_RNG_CONFIG(RCC_RNGCLKSOURCE_HSI48);
+    __HAL_RCC_RNG_CLK_ENABLE();
+
+    RNG_HandleTypeDef rng{};
+    rng.Instance = RNG;
+    if (HAL_RNG_Init(&rng) != HAL_OK) {
+        return false;
+    }
+    size_t offset = 0;
+    while (offset < length) {
+        uint32_t value;
+        if (HAL_RNG_GenerateRandomNumber(&rng, &value) != HAL_OK) {
+            break;
+        }
+        const size_t chunk = std::min(length - offset, sizeof(value));
+        memcpy(buffer + offset, &value, chunk);
+        offset += chunk;
+    }
+    HAL_RNG_DeInit(&rng);
+    if (offset != length) {
+        memset(buffer, 0, length);
+        return false;
+    }
+    return true;
+}
+#endif
 
 #if HAS_RADIO
 bool mixWithLoRaEntropy(uint8_t *buffer, size_t length)
@@ -162,12 +200,20 @@ bool fill(uint8_t *buffer, size_t length, bool useRadioEntropy)
     }
 #endif
 
+#ifdef ARCH_STM32WB
+    // Radio entropy is mixed only into a buffer already filled by a working RNG.
+    filled = fillWithStm32wbRng(buffer, length);
+    if (!filled) {
+        return false;
+    }
+#else
     if (!filled) {
         // As a last resort, fall back to std::random_device. This should only be reached
         // if a platform-specific source was unavailable.
         fillWithRandomDevice(buffer, length);
         filled = true;
     }
+#endif
 
 #if HAS_RADIO
     if (useRadioEntropy) {
